@@ -1,102 +1,58 @@
-class Withdraw < ActiveRecord::Base
-  STATES = [:submitting, :submitted, :rejected, :accepted, :suspect, :processing,
-            :done, :canceled, :almost_done, :failed]
-  COMPLETED_STATES = [:done, :rejected, :canceled, :almost_done, :failed]
+# encoding: UTF-8
+# frozen_string_literal: true
 
-  extend Enumerize
+class Withdraw < ActiveRecord::Base
+  STATES           = %i[prepared submitted rejected accepted suspected processing succeed canceled failed].freeze
+  COMPLETED_STATES = %i[succeed rejected canceled failed].freeze
 
   include AASM
   include AASM::Locking
-  include Currencible
+  include BelongsToCurrency
+  include BelongsToMember
+  include BelongsToAccount
+  include TIDIdentifiable
+  include FeeChargeable
 
-  has_paper_trail on: [:update, :destroy]
+  has_paper_trail on: %i[update destroy]
 
-  enumerize :aasm_state, in: STATES, scope: true
+  acts_as_eventable prefix: 'withdraw', on: %i[create update]
 
-  belongs_to :member
-  belongs_to :account
-  has_many :account_versions, as: :modifiable
-
-  delegate :balance, to: :account, prefix: true
-  delegate :key_text, to: :channel, prefix: true
-  delegate :id, to: :channel, prefix: true
-  delegate :name, to: :member, prefix: true
-  delegate :coin?, :fiat?, to: :currency_obj
-
-  before_validation :fix_precision
-  before_validation :calc_fee
-  before_validation :set_account
-  after_create :generate_sn
+  before_validation(on: :create) { self.account ||= member.ac(currency) }
+  before_validation { self.completed_at ||= Time.current if completed? }
 
   after_update :sync_update
   after_create :sync_create
   after_destroy :sync_destroy
 
-  validates_with WithdrawBlacklistValidator
+  validates :rid, :aasm_state, presence: true
+  validates :txid, uniqueness: { scope: :currency_id }, if: :txid?
 
-  validates :fund_uid, :amount, :fee, :account, :currency, :member, presence: true
+  scope :completed, -> { where(aasm_state: COMPLETED_STATES) }
 
-  validates :fee, numericality: {greater_than_or_equal_to: 0}
-  validates :amount, numericality: {greater_than: 0}
-
-  validates :sum, presence: true, numericality: {greater_than: 0}, on: :create
-  validates :txid, uniqueness: true, allow_nil: true, on: :update
-
-  validate :ensure_account_balance, on: :create
-
-  scope :completed, -> { where aasm_state: COMPLETED_STATES }
-  scope :not_completed, -> { where.not aasm_state: COMPLETED_STATES }
-
-  def self.channel
-    WithdrawChannel.find_by_key(name.demodulize.underscore)
-  end
-
-  def channel
-    self.class.channel
-  end
-
-  def channel_name
-    channel.key
-  end
-
-  alias_attribute :withdraw_id, :sn
-  alias_attribute :full_name, :member_name
-
-  def generate_sn
-    id_part = sprintf '%04d', id
-    date_part = created_at.localtime.strftime('%y%m%d%H%M')
-    self.sn = "#{date_part}#{id_part}"
-    update_column(:sn, sn)
-  end
-
-  aasm :whiny_transitions => false do
-    state :submitting,  initial: true
-    state :submitted,   after_commit: :send_email
-    state :canceled,    after_commit: [:send_email]
+  aasm whiny_transitions: false do
+    state :prepared, initial: true
+    state :submitted
+    state :canceled
     state :accepted
-    state :suspect,     after_commit: :send_email
-    state :rejected,    after_commit: :send_email
-    state :processing,  after_commit: [:send_coins!, :send_email]
-    state :almost_done
-    state :done,        after_commit: [:send_email, :send_sms]
-    state :failed,      after_commit: :send_email
+    state :suspected
+    state :rejected
+    state :processing
+    state :succeed
+    state :failed
 
     event :submit do
-      transitions from: :submitting, to: :submitted
-      after do
-        lock_funds
-      end
+      transitions from: :prepared, to: :submitted
+      after :lock_funds
     end
 
     event :cancel do
-      transitions from: [:submitting, :submitted, :accepted], to: :canceled
-      after do
-        after_cancel
-      end
+      transitions from: %i[prepared submitted accepted], to: :canceled
+      after { unlock_funds unless aasm.from_state == :prepared }
     end
 
-    event :mark_suspect do
-      transitions from: :submitted, to: :suspect
+    event :suspect do
+      transitions from: :submitted, to: :suspected
+      after :unlock_funds
     end
 
     event :accept do
@@ -104,145 +60,122 @@ class Withdraw < ActiveRecord::Base
     end
 
     event :reject do
-      transitions from: [:submitted, :accepted, :processing], to: :rejected
+      transitions from: %i[submitted accepted], to: :rejected
       after :unlock_funds
     end
 
     event :process do
       transitions from: :accepted, to: :processing
+      after :send_coins!
     end
 
-    event :call_rpc do
-      transitions from: :processing, to: :almost_done
-    end
-
-    event :succeed do
-      transitions from: [:processing, :almost_done], to: :done
-
-      before [:set_txid, :unlock_and_sub_funds]
+    event :success do
+      transitions from: :processing, to: :succeed
+      before %i[unlock_and_sub_funds]
     end
 
     event :fail do
       transitions from: :processing, to: :failed
+      after :unlock_funds
     end
   end
 
-  def cancelable?
-    submitting? or submitted? or accepted?
-  end
-
   def quick?
-    sum <= currency_obj.quick_withdraw_max
+    sum <= currency.quick_withdraw_limit
   end
 
   def audit!
     with_lock do
-      if account.examine
-        accept
-        process if quick?
-      else
-        mark_suspect
-      end
-
-      save!
+      accept!
+      process! if quick? && currency.coin?
     end
   end
 
-  private
-
-  def after_cancel
-    unlock_funds unless aasm.from_state == :submitting
+  def fiat?
+    Withdraws::Fiat === self
   end
 
+  def coin?
+    !fiat?
+  end
+
+  def completed?
+    aasm_state.in?(COMPLETED_STATES.map(&:to_s))
+  end
+
+  def as_json_for_event_api
+    { tid:             tid,
+      uid:             member.uid,
+      rid:             rid,
+      currency:        currency.code,
+      amount:          amount.to_s('F'),
+      fee:             fee.to_s('F'),
+      state:           aasm_state,
+      created_at:      created_at.iso8601,
+      updated_at:      updated_at.iso8601,
+      completed_at:    completed_at&.iso8601,
+      blockchain_txid: txid }
+  end
+
+private
+
   def lock_funds
-    account.lock!
-    account.lock_funds sum, reason: Account::WITHDRAW_LOCK, ref: self
+    account.lock_funds(sum)
   end
 
   def unlock_funds
-    account.lock!
-    account.unlock_funds sum, reason: Account::WITHDRAW_UNLOCK, ref: self
+    account.unlock_funds(sum)
   end
 
   def unlock_and_sub_funds
-    account.lock!
-    account.unlock_and_sub_funds sum, locked: sum, fee: fee, reason: Account::WITHDRAW, ref: self
-  end
-
-  def set_txid
-    self.txid = @sn unless coin?
-  end
-
-  def send_email
-    case aasm_state
-    when 'submitted'
-      WithdrawMailer.submitted(self.id).deliver
-    when 'processing'
-      WithdrawMailer.processing(self.id).deliver
-    when 'done'
-      WithdrawMailer.done(self.id).deliver
-    else
-      WithdrawMailer.withdraw_state(self.id).deliver
-    end
-  end
-
-  def send_sms
-    return true if not member.sms_two_factor.activated?
-
-    sms_message = I18n.t('sms.withdraw_done', email: member.email,
-                                              currency: currency_text,
-                                              time: I18n.l(Time.now),
-                                              amount: amount,
-                                              balance: account.balance)
-
-    AMQPQueue.enqueue(:sms_notification, phone: member.phone_number, message: sms_message)
+    account.unlock_and_sub_funds(sum)
   end
 
   def send_coins!
     AMQPQueue.enqueue(:withdraw_coin, id: id) if coin?
   end
 
-  def ensure_account_balance
-    if sum.nil? or sum > account.balance
-      errors.add :base, -> { I18n.t('activerecord.errors.models.withdraw.account_balance_is_poor') }
-    end
-  end
-
-  def fix_precision
-    if sum && currency_obj.precision
-      self.sum = sum.round(currency_obj.precision, BigDecimal::ROUND_DOWN)
-    end
-  end
-
-  def calc_fee
-    if respond_to?(:set_fee)
-      set_fee
-    end
-
-    self.sum ||= 0.0
-    self.fee ||= 0.0
-    self.amount = sum - fee
-  end
-
-  def set_account
-    self.account = member.get_account(currency)
-  end
-
-  def self.resource_name
-    name.demodulize.underscore.pluralize
-  end
-
   def sync_update
-    ::Pusher["private-#{member.sn}"].trigger_async('withdraws', { type: 'update', id: self.id, attributes: self.changes_attributes_as_json })
+    Pusher["private-#{member.sn}"].trigger_async('withdraws', { type: 'update', id: id, attributes: changed_attributes })
   end
 
   def sync_create
-    ::Pusher["private-#{member.sn}"].trigger_async('withdraws', { type: 'create', attributes: self.as_json })
+    Pusher["private-#{member.sn}"].trigger_async('withdraws', { type: 'create', attributes: as_json })
   end
 
   def sync_destroy
-    ::Pusher["private-#{member.sn}"].trigger_async('withdraws', { type: 'destroy', id: self.id })
+    Pusher["private-#{member.sn}"].trigger_async('withdraws', { type: 'destroy', id: id })
   end
-
-
 end
+
+# == Schema Information
+# Schema version: 20180517101842
+#
+# Table name: withdraws
+#
+#  id           :integer          not null, primary key
+#  account_id   :integer          not null
+#  member_id    :integer          not null
+#  currency_id  :integer          not null
+#  amount       :decimal(32, 16)  not null
+#  fee          :decimal(32, 16)  not null
+#  txid         :string(128)
+#  aasm_state   :string(30)       not null
+#  sum          :decimal(32, 16)  not null
+#  type         :string(30)       not null
+#  tid          :string(64)       not null
+#  rid          :string(64)       not null
+#  created_at   :datetime         not null
+#  updated_at   :datetime         not null
+#  completed_at :datetime
+#
+# Indexes
+#
+#  index_withdraws_on_aasm_state            (aasm_state)
+#  index_withdraws_on_account_id            (account_id)
+#  index_withdraws_on_currency_id           (currency_id)
+#  index_withdraws_on_currency_id_and_txid  (currency_id,txid) UNIQUE
+#  index_withdraws_on_member_id             (member_id)
+#  index_withdraws_on_tid                   (tid)
+#  index_withdraws_on_type                  (type)
+#

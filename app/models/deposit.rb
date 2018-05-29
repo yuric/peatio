@@ -1,144 +1,116 @@
-class Deposit < ActiveRecord::Base
-  STATES = [:submitting, :cancelled, :submitted, :rejected, :accepted, :checked, :warning]
+# encoding: UTF-8
+# frozen_string_literal: true
 
-  extend Enumerize
+class Deposit < ActiveRecord::Base
+  STATES = %i[submitted canceled rejected accepted].freeze
 
   include AASM
   include AASM::Locking
-  include Currencible
+  include BelongsToCurrency
+  include BelongsToMember
+  include TIDIdentifiable
+  include FeeChargeable
 
   has_paper_trail on: [:update, :destroy]
 
-  enumerize :aasm_state, in: STATES, scope: true
+  acts_as_eventable prefix: 'deposit', on: %i[create update]
 
-  alias_attribute :sn, :id
+  validates :tid, :aasm_state, :type, presence: true
+  validates :completed_at, presence: { if: :completed? }
 
-  delegate :name, to: :member, prefix: true
-  delegate :id, to: :channel, prefix: true
-  delegate :coin?, :fiat?, to: :currency_obj
+  scope :recent, -> { order(id: :desc) }
 
-  belongs_to :member
-  belongs_to :account
-
-  validates_presence_of \
-    :amount, :account, \
-    :member, :currency
-  validates_numericality_of :amount, greater_than: 0
-
-  scope :recent, -> { order('id DESC')}
-
-  after_update :sync_update
   after_create :sync_create
+  after_update :sync_update
   after_destroy :sync_destroy
 
-  aasm :whiny_transitions => false do
-    state :submitting, initial: true, before_enter: :set_fee
-    state :cancelled
-    state :submitted
+  before_validation { self.completed_at ||= Time.current if completed? }
+
+  aasm whiny_transitions: false do
+    state :submitted, initial: true
+    state :canceled
     state :rejected
-    state :accepted, after_commit: [:do, :send_mail, :send_sms]
-    state :checked
-    state :warning
-
-    event :submit do
-      transitions from: :submitting, to: :submitted
-    end
-
-    event :cancel do
-      transitions from: :submitting, to: :cancelled
-    end
-
-    event :reject do
-      transitions from: :submitted, to: :rejected
-    end
-
+    state :accepted
+    event(:cancel) { transitions from: :submitted, to: :canceled }
+    event(:reject) { transitions from: :submitted, to: :rejected }
     event :accept do
       transitions from: :submitted, to: :accepted
-    end
-
-    event :check do
-      transitions from: :accepted, to: :checked
-    end
-
-    event :warn do
-      transitions from: :accepted, to: :warning
+      after { account.plus_funds(amount) }
     end
   end
 
-  def txid_desc
-    txid
+  def account
+    member&.ac(currency)
   end
 
-  class << self
-    def channel
-      DepositChannel.find_by_key(name.demodulize.underscore)
-    end
-
-    def resource_name
-      name.demodulize.underscore.pluralize
-    end
-
-    def params_name
-      name.underscore.gsub('/', '_')
-    end
-
-    def new_path
-      "new_#{params_name}_path"
-    end
+  def sn
+    member&.sn
   end
 
-  def channel
-    self.class.channel
+  def sn=(sn)
+    self.member = Member.find_by_sn(sn)
   end
 
-  def update_confirmations(data)
-    update_column(:confirmations, data)
+  def as_json_for_event_api
+    { tid:                      tid,
+      uid:                      member.uid,
+      currency:                 currency.code,
+      amount:                   amount.to_s('F'),
+      state:                    aasm_state,
+      created_at:               created_at.iso8601,
+      updated_at:               updated_at.iso8601,
+      completed_at:             completed_at&.iso8601,
+      blockchain_address:       address,
+      blockchain_txid:          txid,
+      blockchain_confirmations: confirmations }
   end
 
-  def txid_text
-    txid && txid.truncate(40)
+  def completed?
+    !submitted?
   end
 
-  private
-  def do
-    account.lock!.plus_funds amount, reason: Account::DEPOSIT, ref: self
-  end
-
-  def send_mail
-    DepositMailer.accepted(self.id).deliver if self.accepted?
-  end
-
-  def send_sms
-    return true if not member.sms_two_factor.activated?
-
-    sms_message = I18n.t('sms.deposit_done', email: member.email,
-                                             currency: currency_text,
-                                             time: I18n.l(Time.now),
-                                             amount: amount,
-                                             balance: account.balance)
-
-    AMQPQueue.enqueue(:sms_notification, phone: member.phone_number, message: sms_message)
-  end
-
-  def set_fee
-    amount, fee = calc_fee
-    self.amount = amount
-    self.fee = fee
-  end
-
-  def calc_fee
-    [amount, 0]
-  end
+private
 
   def sync_update
-    ::Pusher["private-#{member.sn}"].trigger_async('deposits', { type: 'update', id: self.id, attributes: self.changes_attributes_as_json })
+    Pusher["private-#{member.sn}"].trigger_async('deposits', type: 'update', id: id, attributes: as_json.merge(currency: currency.code))
   end
 
   def sync_create
-    ::Pusher["private-#{member.sn}"].trigger_async('deposits', { type: 'create', attributes: self.as_json })
+    Pusher["private-#{member.sn}"].trigger_async('deposits', type: 'create', attributes: as_json.merge(currency: currency.code))
   end
 
   def sync_destroy
-    ::Pusher["private-#{member.sn}"].trigger_async('deposits', { type: 'destroy', id: self.id })
+    Pusher["private-#{member.sn}"].trigger_async('deposits', type: 'destroy', id: id)
   end
 end
+
+# == Schema Information
+# Schema version: 20180517110003
+#
+# Table name: deposits
+#
+#  id            :integer          not null, primary key
+#  member_id     :integer          not null
+#  currency_id   :integer          not null
+#  amount        :decimal(32, 16)  not null
+#  fee           :decimal(32, 16)  not null
+#  address       :string(64)
+#  txid          :string(128)
+#  txout         :integer
+#  aasm_state    :string(30)       not null
+#  confirmations :integer          default(0), not null
+#  type          :string(30)       not null
+#  tid           :string(64)       not null
+#  created_at    :datetime         not null
+#  updated_at    :datetime         not null
+#  completed_at  :datetime
+#
+# Indexes
+#
+#  index_deposits_on_aasm_state_and_member_id_and_currency_id  (aasm_state,member_id,currency_id)
+#  index_deposits_on_currency_id                               (currency_id)
+#  index_deposits_on_currency_id_and_txid_and_txout            (currency_id,txid,txout) UNIQUE
+#  index_deposits_on_member_id_and_txid                        (member_id,txid)
+#  index_deposits_on_tid                                       (tid)
+#  index_deposits_on_type                                      (type)
+#

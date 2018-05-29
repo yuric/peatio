@@ -1,13 +1,19 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
+require_dependency 'admin/base_controller'
+
 module Admin
   module Deposits
-    class BaseController < ::Admin::BaseController
-      def channel
-        @channel ||= DepositChannel.find_by_key(self.controller_name.singularize)
-      end
+    class BaseController < BaseController
 
-      def kls
-        channel.kls
+    protected
+
+      def currency
+        Currency.where(type: self.class.name.demodulize.underscore.gsub(/_controller\z/, '').singularize)
+                .find_by_code!(params[:currency])
       end
+      helper_method :currency
     end
   end
 end

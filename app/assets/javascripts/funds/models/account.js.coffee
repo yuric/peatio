@@ -1,25 +1,16 @@
 class Account extends PeatioModel.Model
-  @configure 'Account', 'member_id', 'currency', 'balance', 'locked', 'created_at', 'updated_at', 'in', 'out', 'deposit_address', 'name_text'
+  @configure 'Account', 'member_id', 'currency', 'balance', 'locked', 'created_at', 'updated_at', 'in', 'out', 'deposit_address', 'currency_icon_url'
 
   @initData: (records) ->
     PeatioModel.Ajax.disable ->
       $.each records, (idx, record) ->
         Account.create(record)
 
-  deposit_channels: ->
-    DepositChannel.findAllBy 'currency', @currency
-
-  withdraw_channels: ->
-    WithdrawChannel.findAllBy 'currency', @currency
-
-  deposit_channel: ->
-    DepositChannel.findBy 'currency', @currency
-
   deposits: ->
-    _.sortBy(Deposit.findAllBy('account_id', @id), (d) -> d.id).reverse()
+    Deposit.findAllBy('currency', @currency)
 
   withdraws: ->
-    _.sortBy(Withdraw.findAllBy('account_id', @id), (d) -> d.id).reverse()
+    Withdraw.findAllBy('account_id', @id)
 
   topDeposits: ->
     @deposits().reverse().slice(0,3)

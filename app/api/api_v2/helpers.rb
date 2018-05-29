@@ -1,8 +1,28 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module APIv2
   module Helpers
-
     def authenticate!
       current_user or raise AuthorizationError
+    end
+
+    def email_must_be_verified!
+      if current_user.level? && !current_user.level.in?(%w[ email_verified phone_verified identity_verified ])
+        raise Grape::Exceptions::Base.new(text: 'Please, verify your E-Mail address.', status: 401)
+      end
+    end
+
+    def phone_must_be_verified!
+      if current_user.level? && !current_user.level.in?(%w[ email_verified phone_verified ])
+        raise Grape::Exceptions::Base.new(text: 'Please, verify your phone.', status: 401)
+      end
+    end
+
+    def identity_must_be_verified!
+      if current_user.level? && !current_user.level.identity_verified?
+        raise Grape::Exceptions::Base.new(text: 'Please, verify your identity.', status: 401)
+      end
     end
 
     def redis
@@ -10,11 +30,10 @@ module APIv2
     end
 
     def current_user
-      @current_user ||= current_token.try(:member)
-    end
-
-    def current_token
-      @current_token ||= env['api_v2.token']
+      # JWT authentication provides member email.
+      if env.key?('api_v2.authentic_member_email')
+        Member.find_by_email(env['api_v2.authentic_member_email'])
+      end
     end
 
     def current_market
@@ -26,41 +45,34 @@ module APIv2
     end
 
     def build_order(attrs)
-      klass = attrs[:side] == 'sell' ? OrderAsk : OrderBid
-
-      order = klass.new(
-        source:        'APIv2',
+      (attrs[:side] == 'sell' ? OrderAsk : OrderBid).new \
         state:         ::Order::WAIT,
-        member_id:     current_user.id,
-        ask:           current_market.base_unit,
-        bid:           current_market.quote_unit,
-        currency:      current_market.id,
+        member:        current_user,
+        ask:           Currency.enabled.find_by!(code: current_market.base_unit).id,
+        bid:           Currency.enabled.find_by!(code: current_market.quote_unit).id,
+        market:        current_market,
         ord_type:      attrs[:ord_type] || 'limit',
         price:         attrs[:price],
         volume:        attrs[:volume],
         origin_volume: attrs[:volume]
-      )
     end
 
     def create_order(attrs)
-      order = build_order attrs
+      order = build_order(attrs)
       Ordering.new(order).submit
       order
-    rescue
-      Rails.logger.info "Failed to create order: #{$!}"
-      Rails.logger.debug order.inspect
-      Rails.logger.debug $!.backtrace.join("\n")
-      raise CreateOrderError, $!
+    rescue => e
+      report_exception_to_screen(e)
+      raise CreateOrderError, e.inspect
     end
 
     def create_orders(multi_attrs)
-      orders = multi_attrs.map {|attrs| build_order attrs }
+      orders = multi_attrs.map(&method(:build_order))
       Ordering.new(orders).submit
       orders
-    rescue
-      Rails.logger.info "Failed to create order: #{$!}"
-      Rails.logger.debug $!.backtrace.join("\n")
-      raise CreateOrderError, $!
+    rescue => e
+      report_exception_to_screen(e)
+      raise CreateOrderError, e.inspect
     end
 
     def order_param
@@ -95,6 +107,5 @@ module APIv2
         JSON.parse('[%s]' % redis.lrange(key, offset, -1).join(','))
       end
     end
-
   end
 end

@@ -1,42 +1,117 @@
-require 'spec_helper'
+# encoding: UTF-8
+# frozen_string_literal: true
 
 describe Market do
-
-  context 'visible market' do
-    # it { expect(Market.orig_all.count).to eq(2) }
-    it { expect(Market.all.count).to eq(1) }
-  end
-
-  context 'markets hash' do
-    it "should list all markets info" do
-      Market.to_hash.should == {:btccny=>{:name=>"BTC/CNY", :base_unit=>"btc", :quote_unit=>"cny"}}
-    end
+  context 'enabled market' do
+    it { expect(Market.enabled.count).to eq(1) }
   end
 
   context 'market attributes' do
-    subject { Market.find('btccny') }
+    subject { Market.find(:btcusd) }
 
-    its(:id)         { should == 'btccny' }
-    its(:name)       { should == 'BTC/CNY' }
-    its(:base_unit)  { should == 'btc' }
-    its(:quote_unit) { should == 'cny' }
-    its(:visible)    { should be_true }
-  end
+    it 'id' do
+      expect(subject.id).to eq 'btcusd'
+    end
 
-  context 'enumerize' do
-    subject { Market.enumerize }
+    it 'name' do
+      expect(subject.name).to eq 'BTC/USD'
+    end
 
-    it { should be_has_key :btccny }
-    it { should be_has_key :ptsbtc }
+    it 'base_unit' do
+      expect(subject.base_unit).to eq 'btc'
+    end
+
+    it 'quote_unit' do
+      expect(subject.quote_unit).to eq 'usd'
+    end
+
+    it 'enabled' do
+      expect(subject.enabled).to be true
+    end
   end
 
   context 'shortcut of global access' do
-    subject { Market.find('btccny') }
+    let(:log) { Market.find(:btcusd) }
 
-    its(:bids)   { should_not be_nil }
-    its(:asks)   { should_not be_nil }
-    its(:trades) { should_not be_nil }
-    its(:ticker) { should_not be_nil }
+    it 'bids' do
+      expect(log.bids).to be
+    end
+
+    it 'asks' do
+      expect(log.asks).to be
+    end
+
+    it 'trades' do
+      expect(log.trades).to be
+    end
+
+    it 'ticker' do
+      expect(log.ticker).to be
+    end
   end
 
+  context 'validations' do
+    let(:valid_attributes) do
+      { ask_unit:      :btc,
+        bid_unit:      :xrp,
+        bid_fee:       0.1,
+        ask_fee:       0.2,
+        ask_precision: 4,
+        bid_precision: 4,
+        position:      100 }
+    end
+
+    it 'creates valid record' do
+      record = Market.new(valid_attributes)
+      expect(record.save).to eq true
+    end
+
+    it 'validates equivalence of units' do
+      record = Market.new(valid_attributes.merge(bid_unit: valid_attributes[:ask_unit]))
+      record.save
+      expect(record.errors.full_messages).to include(/ask unit is invalid/i)
+    end
+
+    it 'validates uniqueness of ID' do
+      record = build(:market, :btcusd)
+      record.save
+      expect(record.errors.full_messages).to include(/id has already been taken/i)
+    end
+
+    it 'validates presence of units' do
+      %i[bid_unit ask_unit].each do |field|
+        record = Market.new(valid_attributes.except(field))
+        record.save
+        expect(record.errors.full_messages).to include(/#{to_readable(field)} can't be blank/i)
+      end
+    end
+
+    it 'validates fields to be greater than or equal to 0' do
+      %i[bid_fee ask_fee bid_precision ask_precision position].each do |field|
+        record = Market.new(valid_attributes.merge(field => -1))
+        record.save
+        expect(record.errors.full_messages).to include(/#{to_readable(field)} must be greater than or equal to 0/i)
+      end
+    end
+
+    it 'validates fields to be integer' do
+      %i[bid_precision ask_precision position].each do |field|
+        record = Market.new(valid_attributes.merge(field => 0.1))
+        record.save
+        expect(record.errors.full_messages).to include(/#{to_readable(field)} must be an integer/i)
+      end
+    end
+
+    it 'validates unit codes to be inclusion of currency codes' do
+      %i[bid_unit ask_unit].each do |field|
+        record = Market.new(valid_attributes.merge(field => :bad))
+        record.save
+        expect(record.errors.full_messages).to include(/#{to_readable(field)} is not included in the list/i)
+      end
+    end
+
+    def to_readable(field)
+      field.to_s.humanize.downcase
+    end
+  end
 end

@@ -1,12 +1,7 @@
-#!/usr/bin/env ruby
+# encoding: UTF-8
+# frozen_string_literal: true
 
-ENV["RAILS_ENV"] ||= "development"
-
-root = File.expand_path(File.dirname(__FILE__))
-root = File.dirname(root) until File.exists?(File.join(root, 'config'))
-Dir.chdir(root)
-
-require File.join(root, "config", "environment")
+require File.join(ENV.fetch('RAILS_ROOT'), 'config', 'environment')
 
 $running = true
 Signal.trap("TERM") do

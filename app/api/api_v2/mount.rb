@@ -1,5 +1,9 @@
-require_relative 'errors'
-require_relative 'validations'
+# encoding: UTF-8
+# frozen_string_literal: true
+
+require_dependency 'api_v2/errors'
+require_dependency 'api_v2/validations'
+require_dependency 'api_v2/withdraws'
 
 module APIv2
   class Mount < Grape::API
@@ -9,35 +13,55 @@ module APIv2
 
     cascade false
 
-    format :json
+    format         :json
+    content_type   :json, 'application/json'
     default_format :json
 
-    helpers ::APIv2::Helpers
+    helpers APIv2::Helpers
 
     do_not_route_options!
+
+    logger Rails.logger.dup
+    logger.formatter = GrapeLogging::Formatters::Rails.new
+    use GrapeLogging::Middleware::RequestLogger,
+        logger:    logger,
+        log_level: :info,
+        include:   [GrapeLogging::Loggers::Response.new,
+                    GrapeLogging::Loggers::FilterParameters.new,
+                    GrapeLogging::Loggers::ClientEnv.new,
+                    GrapeLogging::Loggers::RequestHeaders.new]
 
     use APIv2::Auth::Middleware
 
     include Constraints
     include ExceptionHandlers
 
-    before do
-      header 'Access-Control-Allow-Origin', '*'
-    end
+    use APIv2::CORS::Middleware
 
-    mount Markets
-    mount Tickers
-    mount Members
-    mount Deposits
-    mount Orders
-    mount OrderBooks
-    mount Trades
-    mount K
-    mount Tools
+    mount APIv2::Markets
+    mount APIv2::Tickers
+    mount APIv2::Members
+    mount APIv2::Deposits
+    mount APIv2::Orders
+    mount APIv2::OrderBooks
+    mount APIv2::Trades
+    mount APIv2::K
+    mount APIv2::Tools
+    mount APIv2::Withdraws
+    mount APIv2::Sessions
+    mount APIv2::Solvency
+    mount APIv2::Fees
+    mount APIv2::Pusher
 
-    base_path = Rails.env.production? ? "#{ENV['URL_SCHEMA']}://#{ENV['URL_HOST']}/#{PREFIX}" : PREFIX
-    add_swagger_documentation base_path: base_path,
-      mount_path: '/doc/swagger', api_version: 'v2',
-      hide_documentation_path: true
+    # The documentation is accessible at http://localhost:3000/swagger?url=/api/v2/swagger
+    add_swagger_documentation base_path:   PREFIX,
+                              mount_path:  '/swagger',
+                              api_version: 'v2',
+                              doc_version: Peatio::VERSION,
+                              info: {
+                                title:       'Member API v2',
+                                description: 'Member API is API which can be used by client application like SPA.',
+                                licence:     'MIT',
+                                license_url: 'https://github.com/rubykube/peatio/blob/master/LICENSE.md' }
   end
 end

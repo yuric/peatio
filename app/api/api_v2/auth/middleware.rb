@@ -1,26 +1,33 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module APIv2
   module Auth
-    class Middleware < ::Grape::Middleware::Base
-
+    class Middleware < Grape::Middleware::Base
       def before
-        if provided?
-          auth = Authenticator.new(request, params)
-          @env['api_v2.token'] = auth.authenticate!
-        end
+        return unless auth_by_jwt?
+
+        env['api_v2.authentic_member_email'] = \
+          JWTAuthenticator.new(headers['Authorization']).authenticate!(return: :email)
       end
 
-      def provided?
-        params[:access_key] && params[:tonce] && params[:signature]
+    private
+
+      def auth_by_jwt?
+        headers.key?('Authorization')
       end
 
       def request
-        @request ||= ::Grape::Request.new(env)
+        @request ||= Grape::Request.new(env)
       end
 
       def params
-        @params ||= request.params
+        request.params
       end
 
+      def headers
+        request.headers
+      end
     end
   end
 end

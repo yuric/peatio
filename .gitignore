@@ -17,16 +17,18 @@
 
 # Ignore all logfiles and tempfiles.
 log
+*.log
 tmp
 
 # Ignore all config files
 /config/application.yml
-/config/database.yml
-/config/slack.yml
-/config/currencies.yml
 /config/markets.yml
-/config/amqp.yml
-/config/banks.yml
+/config/markets.old.yml
+/config/deposit_channels.old.yml
+/config/withdraw_channels.old.yml
+/config/plugins.yml
+/config/management_api_v1.yml
+/config/seed/*
 
 # Ignore translations.js
 /public/javascripts/translations.js
@@ -43,7 +45,13 @@ tags
 .idea
 
 /vendor/bundle
+/vendor/assets/yarn_components
+/vendor/plugins
 .env
-.ruby-version
 .DS_Store
 .agignore
+**/*.tgz
+
+# Ignore useless yarn files and cache
+.cache
+.yarnrc

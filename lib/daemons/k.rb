@@ -1,14 +1,9 @@
-#!/usr/bin/env ruby
+# encoding: UTF-8
+# frozen_string_literal: true
 
-ENV["RAILS_ENV"] ||= "development"
+require File.join(ENV.fetch('RAILS_ROOT'), "config", "environment")
 
-root = File.expand_path(File.dirname(__FILE__))
-root = File.dirname(root) until File.exists?(File.join(root, 'config'))
-Dir.chdir(root)
-
-require File.join(root, "config", "environment")
-
-Rails.logger = @logger = Logger.new STDOUT
+@logger = Rails.logger
 
 @r ||= KlineDB.redis
 
@@ -31,8 +26,8 @@ def next_ts(market, period = 1)
   if ts = last_ts(market, period)
     ts += period.minutes
   else
-    if first_trade = Trade.with_currency(market).first
-      ts = Trade.with_currency(market).first.created_at.to_i
+    if first_trade = Trade.with_market(market).first
+      ts = Trade.with_market(market).first.created_at.to_i
       period == 10080 ? Time.at(ts).beginning_of_week : Time.at(ts -  ts % (period * 60))
     end
   end
@@ -50,7 +45,7 @@ def _k1_set(market, start, period)
 end
 
 def k1(market, start)
-  trades = Trade.with_currency(market).where('created_at >= ? AND created_at < ?', start, 1.minutes.since(start)).pluck(:price, :volume)
+  trades = Trade.with_market(market).where('created_at >= ? AND created_at < ?', start, 1.minutes.since(start)).pluck(:price, :volume)
   return nil if trades.count == 0
 
   prices, volumes = trades.transpose
@@ -80,7 +75,7 @@ def append_point(market, period, ts)
   k = key(market, period)
   point = get_point(market, period, ts)
 
-  @logger.info "append #{k}: #{point.to_json}"
+  @logger.info { "append #{k}: #{point.to_json}" }
   @r.rpush k, point.to_json
 
   if period == 1
@@ -95,7 +90,7 @@ def update_point(market, period, ts)
   k = key(market, period)
   point = get_point(market, period, ts)
 
-  @logger.info "update #{k}: #{point.to_json}"
+  @logger.info { "update #{k}: #{point.to_json}" }
   @r.rpop k
   @r.rpush k, point.to_json
 end
@@ -118,7 +113,7 @@ def fill(market, period = 1)
 end
 
 while($running) do
-  Market.all.each do |market|
+  Market.find_each do |market|
     ts = next_ts(market.id, 1)
     next unless ts
 

@@ -1,3 +1,6 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module Private
   class OrdersController < BaseController
 
@@ -15,7 +18,7 @@ module Private
     end
 
     def clear
-      @orders = current_user.orders.with_currency(current_market).with_state(:wait)
+      @orders = current_user.orders.with_market(current_market).with_state(:wait)
       Ordering.new(@orders).cancel
       render status: 200, nothing: true
     end

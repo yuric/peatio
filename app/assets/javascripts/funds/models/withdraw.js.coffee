@@ -1,10 +1,6 @@
 class Withdraw extends PeatioModel.Model
-  @configure 'Withdraw', 'sn', 'account_id', 'member_id', 'currency', 'amount', 'fee', 'fund_uid', 'fund_extra',
-    'created_at', 'updated_at', 'done_at', 'txid', 'blockchain_url', 'aasm_state', 'sum', 'type', 'is_submitting'
-
-  constructor: ->
-    super
-    @is_submitting = @aasm_state == "submitting"
+  @configure 'Withdraw', 'account_id', 'member_id', 'currency', 'amount', 'fee', 'rid',
+    'created_at', 'updated_at', 'completed_at', 'txid', 'wallet_url', 'transaction_url', 'aasm_state', 'sum', 'type'
 
   @initData: (records) ->
     PeatioModel.Ajax.disable ->
@@ -14,9 +10,6 @@ class Withdraw extends PeatioModel.Model
   afterScope: ->
     "#{@pathName()}"
 
-  pathName: ->
-    switch @currency
-      when 'cny' then 'banks'
-      when 'btc' then 'satoshis'
+  pathName: -> @currency
 
 window.Withdraw = Withdraw
