@@ -1,56 +1,41 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 class ApplicationController < ActionController::Base
+  include SessionUtils
+  extend Memoist
+
   protect_from_forgery with: :exception
 
   helper_method :current_user, :is_admin?, :current_market, :gon
-  before_action :set_timezone, :set_gon
-  after_action :allow_iframe
-  after_action :set_csrf_cookie_for_ng
-  rescue_from CoinRPC::ConnectionRefusedError, with: :coin_rpc_connection_refused
+  before_action :set_language, :set_gon
+  around_action :share_user
 
-  private
-
-  include SimpleCaptcha::ControllerHelpers
-  include TwoFactorHelper
-
-  def currency
-    "#{params[:ask]}#{params[:bid]}".to_sym
-  end
+private
 
   def current_market
-    @current_market ||= Market.find_by_id(params[:market]) || Market.find_by_id(cookies[:market_id]) || Market.first
+    unless params[:market].blank?
+      Market.find_by_id(params[:market])
+    end || Market.first
   end
-
-  def redirect_back_or_settings_page
-    if cookies[:redirect_to].present?
-      redirect_to cookies[:redirect_to]
-      cookies[:redirect_to] = nil
-    else
-      redirect_to settings_path
-    end
-  end
+  memoize :current_market
 
   def current_user
-    @current_user ||= Member.current = Member.enabled.where(id: session[:member_id]).first
+    return if session[:member_id].blank?
+    Member.enabled.find_by_id(session[:member_id])
   end
+  memoize :current_user
 
   def auth_member!
     unless current_user
-      set_redirect_to
       redirect_to root_path, alert: t('activations.new.login_required')
     end
   end
 
-  def auth_activated!
-    redirect_to settings_path, alert: t('private.settings.index.auth-activated') unless current_user.activated?
-  end
-
   def auth_verified!
-    unless current_user and current_user.id_document and current_user.id_document_verified?
+    if current_user.level.present? && !current_user.level.identity_verified?
       redirect_to settings_path, alert: t('private.settings.index.auth-verified')
     end
-  end
-
-  def auth_no_initial!
   end
 
   def auth_anybody!
@@ -58,74 +43,28 @@ class ApplicationController < ActionController::Base
   end
 
   def auth_admin!
-    redirect_to main_app.root_path unless is_admin?
+    redirect_to root_path unless is_admin?
   end
 
   def is_admin?
-    current_user && current_user.admin?
-  end
-
-  def two_factor_activated!
-    if not current_user.two_factors.activated?
-      redirect_to settings_path, alert: t('two_factors.auth.please_active_two_factor')
-    end
-  end
-
-  def two_factor_auth_verified?
-    return false if not current_user.two_factors.activated?
-    return false if two_factor_failed_locked? && !simple_captcha_valid?
-
-    two_factor = current_user.two_factors.by_type(params[:two_factor][:type])
-    return false if not two_factor
-
-    two_factor.assign_attributes params.require(:two_factor).permit(:otp)
-    if two_factor.verify?
-      clear_two_factor_auth_failed
-      true
-    else
-      increase_two_factor_auth_failed
-      false
-    end
-  end
-
-  def two_factor_failed_locked?
-    failed_two_factor_auth > 10
-  end
-
-  def failed_two_factor_auth
-    Rails.cache.read(failed_two_factor_auth_key) || 0
-  end
-
-  def failed_two_factor_auth_key
-    "peatio:session:#{request.ip}:failed_two_factor_auths"
-  end
-
-  def increase_two_factor_auth_failed
-    Rails.cache.write(failed_two_factor_auth_key, failed_two_factor_auth+1, expires_in: 1.month)
-  end
-
-  def clear_two_factor_auth_failed
-    Rails.cache.delete failed_two_factor_auth_key
-  end
-
-  def set_timezone
-    Time.zone = ENV['TIMEZONE'] if ENV['TIMEZONE']
+    current_user&.admin?
   end
 
   def set_gon
-    gon.env = Rails.env
+    gon.environment = Rails.env
     gon.local = I18n.locale
     gon.market = current_market.attributes
     gon.ticker = current_market.ticker
-    gon.markets = Market.to_hash
-
+    gon.markets = Market.find_each.each_with_object({}) { |market, memo| memo[market.id] = market.as_json }
+    gon.host = request.base_url
     gon.pusher = {
-      key:       ENV['PUSHER_KEY'],
-      wsHost:    ENV['PUSHER_HOST']      || 'ws.pusherapp.com',
-      wsPort:    ENV['PUSHER_WS_PORT']   || '80',
-      wssPort:   ENV['PUSHER_WSS_PORT']  || '443',
-      encrypted: ENV['PUSHER_ENCRYPTED'] == 'true'
-    }
+      key:       ENV.fetch('PUSHER_CLIENT_KEY'),
+      wsHost:    ENV.fetch('PUSHER_CLIENT_WS_HOST'),
+      httpHost:  ENV['PUSHER_CLIENT_HTTP_HOST'],
+      wsPort:    ENV.fetch('PUSHER_CLIENT_WS_PORT'),
+      wssPort:   ENV.fetch('PUSHER_CLIENT_WSS_PORT'),
+    }.reject { |k, v| v.blank? }
+     .merge(encrypted: ENV.fetch('PUSHER_CLIENT_ENCRYPTED').present?)
 
     gon.clipboard = {
       :click => I18n.t('actions.clipboard.click'),
@@ -133,7 +72,6 @@ class ApplicationController < ActionController::Base
     }
 
     gon.i18n = {
-      brand: I18n.t('gon.brand'),
       ask: I18n.t('gon.ask'),
       bid: I18n.t('gon.bid'),
       cancel: I18n.t('actions.cancel'),
@@ -185,15 +123,16 @@ class ApplicationController < ActionController::Base
       }
     }
 
-    gon.currencies = Currency.all.inject({}) do |memo, currency|
+    gon.currencies = Currency.enabled.inject({}) do |memo, currency|
       memo[currency.code] = {
-        code: currency[:code],
-        symbol: currency[:symbol],
-        isCoin: currency[:coin]
+        code: currency.code,
+        symbol: currency.symbol,
+        isCoin: currency.coin?
       }
       memo
     end
-    gon.fiat_currency = Currency.first.code
+    gon.display_currency = ENV.fetch('DISPLAY_CURRENCY')
+    gon.fiat_currencies = Currency.enabled.fiats.pluck(:code)
 
     gon.tickers = {}
     Market.all.each do |market|
@@ -201,44 +140,33 @@ class ApplicationController < ActionController::Base
     end
 
     if current_user
-      gon.current_user = { sn: current_user.sn }
-      gon.accounts = current_user.accounts.inject({}) do |memo, account|
-        memo[account.currency] = {
-          currency: account.currency,
+      gon.user = { sn: current_user.sn }
+      gon.accounts = current_user.accounts.enabled.inject({}) do |memo, account|
+        memo[account.currency.code] = {
+          currency: account.currency.code,
           balance: account.balance,
           locked: account.locked
-        } if account.currency_obj.try(:visible)
+        } if account.currency.try(:enabled)
         memo
       end
     end
+
+    gon.bank_details_html = ENV['BANK_DETAILS_HTML']
   end
 
-  def coin_rpc_connection_refused
-    render 'errors/connection'
-  end
-
-  def save_session_key(member_id, key)
-    Rails.cache.write "peatio:sessions:#{member_id}:#{key}", 1, expire_after: ENV['SESSION_EXPIRE'].to_i.minutes
-  end
-
-  def clear_all_sessions(member_id)
-    if redis = Rails.cache.instance_variable_get(:@data)
-      redis.keys("peatio:sessions:#{member_id}:*").each {|k| Rails.cache.delete k.split(':').last }
+  def set_language
+    cookies[:lang] = params[:lang] unless params[:lang].blank?
+    cookies[:lang].tap do |locale|
+      I18n.locale = locale if locale.present? && I18n.available_locales.include?(locale.to_sym)
     end
-
-    Rails.cache.delete_matched "peatio:sessions:#{member_id}:*"
   end
 
-  def allow_iframe
-    response.headers.except! 'X-Frame-Options' if Rails.env.development?
+  def share_user
+    Member.current = current_user
+    yield
+  ensure
+    # http://stackoverflow.com/questions/2513383/access-current-user-in-model
+    # To address the thread variable leak issues in Puma/Thin webserver
+    Member.current = nil
   end
-
-  def set_csrf_cookie_for_ng
-    cookies['XSRF-TOKEN'] = form_authenticity_token if protect_against_forgery?
-  end
-
-  def verified_request?
-    super || form_authenticity_token == request.headers['X-XSRF-TOKEN']
-  end
-
 end

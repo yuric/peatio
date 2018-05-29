@@ -1,3 +1,6 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module APIv2
   class K < Grape::API
     helpers ::APIv2::NamedParams
@@ -24,15 +27,15 @@ module APIv2
     get "/k_with_pending_trades" do
       k = get_k_json
 
-      if params[:trade_id] > 0
-        from = Time.at k.last[0]
-        trades = Trade.with_currency(params[:market])
-          .where('created_at >= ? AND id < ?', from, params[:trade_id])
-          .map(&:for_global)
+      if params[:trade_id] > 0 && k.present?
+        from   = Time.at k.last[0]
+        trades = Trade.with_market(params[:market])
+                      .where('created_at >= ? AND id < ?', from, params[:trade_id])
+                      .map(&:for_global)
 
-        {k: k, trades: trades}
+        { k: k, trades: trades }
       else
-        {k: k, trades: []}
+        { k: k, trades: [] }
       end
     end
 

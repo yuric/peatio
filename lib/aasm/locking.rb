@@ -1,6 +1,9 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module AASM::Locking
-  def aasm_write_state(state)
+  def aasm_write_state(*)
     lock!
-    super(state)
+    super
   end
 end

@@ -1,3 +1,6 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module Private
   class OrderBidsController < BaseController
     include Concerns::OrderCreation
@@ -8,7 +11,7 @@ module Private
     end
 
     def clear
-      @orders = OrderBid.where(member_id: current_user.id).with_state(:wait).with_currency(current_market)
+      @orders = OrderBid.where(member_id: current_user.id).with_state(:wait).with_market(current_market)
       Ordering.new(@orders).cancel
       render status: 200, nothing: true
     end

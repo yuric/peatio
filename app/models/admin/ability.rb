@@ -1,3 +1,6 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module Admin
   class Ability
     include CanCan::Ability
@@ -9,19 +12,16 @@ module Admin
       can :read, Trade
       can :read, Proof
       can :update, Proof
-      can :manage, Document
       can :manage, Member
-      can :manage, Ticket
-      can :manage, IdDocument
-      can :manage, TwoFactor
 
       can :menu, Deposit
-      can :manage, ::Deposits::Bank
-      can :manage, ::Deposits::Satoshi
+      Deposit.descendants.each { |d| can :manage, d }
 
       can :menu, Withdraw
-      can :manage, ::Withdraws::Bank
-      can :manage, ::Withdraws::Satoshi
+      Withdraw.descendants.each { |w| can :manage, w }
+
+      can :manage, Market
+      can :manage, Currency
     end
   end
 end

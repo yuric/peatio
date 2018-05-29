@@ -1,11 +1,20 @@
-FactoryGirl.define do
+# encoding: UTF-8
+# frozen_string_literal: true
+
+FactoryBot.define do
   factory :deposit do
-    member { create(:member) }
-    account { member.get_account(currency) }
-    currency { 'btc' }
-    fund_uid { Faker::Lorem.characters }
-    fund_extra { Faker::Lorem.characters }
-    amount { (100..10000).to_a.sample.to_d }
-    txid { Faker::Lorem.characters(16) }
+    member { create(:member, :verified_identity) }
+    amount { Kernel.rand(100..10_000).to_d }
+
+    factory :deposit_btc, class: 'Deposits::Coin' do
+      currency { Currency.find_by!(code: :btc) }
+      address { Faker::Bitcoin.address }
+      txid { Faker::Lorem.characters(64) }
+      txout { 0 }
+    end
+
+    factory :deposit_usd, class: 'Deposits::Fiat' do
+      currency { Currency.find_by!(code: :usd) }
+    end
   end
 end

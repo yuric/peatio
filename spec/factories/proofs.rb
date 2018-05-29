@@ -1,8 +1,10 @@
-# Read about factories at https://github.com/thoughtbot/factory_girl
+# encoding: UTF-8
+# frozen_string_literal: true
 
-FactoryGirl.define do
+FactoryBot.define do
   factory :proof do
-    root "MyString"
-    state "MyString"
+    root 'root: {}'
+    ready true
+    currency_id { Currency.find_by_code(:btc).id }
   end
 end

@@ -1,18 +1,18 @@
-require 'spec_helper'
+# encoding: UTF-8
+# frozen_string_literal: true
 
 describe TransferObserver do
-  describe "#after_update" do
-    let!(:member) { create(:member) }
-    let!(:deposit) { create(:deposit, aasm_state: 'submitted')}
+  describe '#after_update' do
+    let!(:member) { create(:member, :verified_identity) }
+    let!(:deposit) { create(:deposit_btc, aasm_state: 'submitted') }
     before do
       TransferObserver.any_instance.stubs(:current_user).returns(member)
     end
 
-    subject { deposit.update_attributes(aasm_state: 'accepted')}
+    subject { deposit.update_attributes(aasm_state: 'accepted') }
 
-    it "should create the audit log" do
-      expect { subject }.to change{ Audit::TransferAuditLog.count }.by(1)
-
+    it 'should create the audit log' do
+      expect { subject }.to change { Audit::TransferAuditLog.count }.by(1)
     end
   end
 end

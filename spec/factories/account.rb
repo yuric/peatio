@@ -1,12 +1,14 @@
-FactoryGirl.define do
-  factory :account do
-    locked { "0.0".to_d }
-    balance { "100.0".to_d }
-    currency :cny
+# encoding: UTF-8
+# frozen_string_literal: true
 
-    factory :account_btc do
-      currency :btc
+module AccountFactory
+  def create_account(*arguments)
+    currency   = Symbol === arguments.first ? arguments.first : :usd
+    attributes = arguments.extract_options!
+    attributes.delete(:member) { create(:member) }.ac(currency).tap do |account|
+      account.update!(attributes)
     end
   end
 end
 
+RSpec.configure { |config| config.include AccountFactory }

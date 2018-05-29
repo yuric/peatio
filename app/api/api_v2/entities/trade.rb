@@ -1,3 +1,6 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module APIv2
   module Entities
     class Trade < Base
@@ -5,7 +8,7 @@ module APIv2
       expose :price
       expose :volume
       expose :funds
-      expose :currency, as: :market
+      expose :market_id, as: :market
       expose :created_at, format_with: :iso8601
 
       expose :side do |trade, options|

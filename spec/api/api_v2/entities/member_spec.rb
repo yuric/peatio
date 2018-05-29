@@ -1,17 +1,23 @@
-require 'spec_helper'
+# encoding: UTF-8
+# frozen_string_literal: true
 
 describe APIv2::Entities::Member do
-
-  let(:member) { create(:verified_member) }
+  let(:member) { create(:member, :verified_identity) }
 
   subject { OpenStruct.new APIv2::Entities::Member.represent(member).serializable_hash }
 
-  before { Currency.stubs(:codes).returns(%w(cny btc)) }
+  it { expect(subject.sn).to eq member.sn }
+  it { expect(subject.email).to eq member.email }
 
-  its(:sn)        { should == member.sn }
-  its(:name)      { should == member.name }
-  its(:email)     { should == member.email }
-  its(:activated) { should == true }
-  its(:accounts)  { should =~ [{:currency=>"cny", :balance=>"0.0", :locked=>"0.0"}, {:currency=>"btc", :balance=>"0.0", :locked=>"0.0"}] }
-
+  it 'accounts' do
+    expect(subject.accounts).to match [
+      { currency: 'usd', balance: '0.0', locked: '0.0' },
+      { currency: 'btc', balance: '0.0', locked: '0.0' },
+      { currency: 'dash', balance: '0.0', locked: '0.0' },
+      { currency: 'eth', balance: '0.0', locked: '0.0' },
+      { currency: 'xrp', balance: '0.0', locked: '0.0' },
+      { currency: 'trst', balance: '0.0', locked: '0.0' },
+      { currency: 'bch', balance: '0.0', locked: '0.0' }
+    ]
+  end
 end

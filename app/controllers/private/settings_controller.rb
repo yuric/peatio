@@ -1,9 +1,10 @@
+# encoding: UTF-8
+# frozen_string_literal: true
+
 module Private
   class SettingsController < BaseController
     def index
-      unless current_user.activated?
-        flash.now[:info] = t('.activated')
-      end
+
     end
   end
 end

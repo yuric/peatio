@@ -1,31 +1,24 @@
-#!/usr/bin/env ruby
+# encoding: UTF-8
+# frozen_string_literal: true
 
-# You might want to change this
-ENV["RAILS_ENV"] ||= "development"
+require File.join(ENV.fetch('RAILS_ROOT'), 'config', 'environment')
 
-root = File.expand_path(File.dirname(__FILE__))
-root = File.dirname(root) until File.exists?(File.join(root, 'config'))
-Dir.chdir(root)
+running = true
+Signal.trap(:TERM) { running = false }
 
-require File.join(root, "config", "environment")
-
-$running = true
-Signal.trap("TERM") do
-  $running = false
-end
-
-while($running) do
-  PaymentTransaction::Normal.with_aasm_state(:unconfirm, :confirming).each do |tx|
+while running do
+  Deposits::Coin.recent.where(aasm_state: :submitted).find_each batch_size: 100 do |deposit|
+    break unless running
     begin
-      tx.with_lock do
-        tx.check!
+      confirmations = deposit.currency.api.load_deposit!(deposit.txid).fetch(:confirmations)
+      deposit.with_lock do
+        deposit.update!(confirmations: confirmations)
+        deposit.accept! if confirmations >= deposit.currency.deposit_confirmations
       end
-    rescue
-      puts "Error on PaymentTransaction::Normal: #{$!}"
-      puts $!.backtrace.join("\n")
-      next
+    rescue => e
+      report_exception(e)
     end
   end
 
-  sleep 5
+  Kernel.sleep 5
 end
